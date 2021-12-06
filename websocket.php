@@ -101,7 +101,7 @@ class WebSocketClient extends WebSocketBase
 		$scheme = ((strtolower($scheme)=='wss')?'tls':'tcp');
 		$this->socket = @stream_socket_client($scheme.'://'.$host.':'.$port, $this->errno, $this->errstr, 10);
 		if (!$this->socket) {throw new WebSocketException('connect error ('.$this->errstr.')');}
-		$this->set_timeout(55);	
+		$this->set_timeout(10);	
 		$key = "";
 		for ($i=1;$i<=16;$i++) $key .= chr(mt_rand(0,255));
 		$key = base64_encode($key);
@@ -172,6 +172,7 @@ class WebSocketClient extends WebSocketBase
 	*/
     public function send($data, $opcode = 'text', $is_final = true)
 	{
+		$z = null;
 		if (!$this->opened)
 		{throw new WebSocketException('tried to send/recv on closed socket');}
 		if (in_array($opcode, ['ping', 'pong', 'close']))
@@ -186,12 +187,12 @@ class WebSocketClient extends WebSocketBase
 			if (!$x)
 			{$z = @stream_get_meta_data($this->socket);}
 			// соединение рипнулось
-			if ($x===FALSE || $z['eof'] || !$this->opened)
+			/*if ($x===FALSE || (isset($z['eof'])&&((int)$z['eof'])==1) || !$this->opened)
 			{
 				$op = $this->opened;
 				$this->close();
 				throw new WebSocketException('error when sending data (z = '.$z.', res='.((int)$x).', eof='.((int)$z['eof']).', opened='.((int)$op).')');
-			}
+			}*/
 		}
 		@fflush($this->socket);
     }
@@ -245,13 +246,13 @@ class WebSocketClient extends WebSocketBase
 					}
 				}
 			}
-			if ($x===FALSE || isset($z['eof']) || !$this->opened)
-			{
+			/*if ($x===FALSE || (isset($z['eof'])&&((int)$z['eof'])==1) || !$this->opened)
+			{			
 				// соединение рипнулось
 				$op = $this->opened;
 				$this->close();
 				throw new WebSocketException('error when receiving data (z = '.$z.', res='.((int)$x).', eof='.((int)$z['eof']).', opened='.((int)$op).')');
-			}
+			}*/
 			// цикл нужен чтобы забрать все готовые фреймы из буфера
 			while ($data = $this->hybi_decode($x, $this->session))
 			{
@@ -380,7 +381,10 @@ class WebSocketBase
 		if ($len==126) $fmt = [8, 'n'];
 		elseif ($len<=125) $fmt = [6];
 		elseif ($len==127) $fmt = [14, 'J'];
-		list($offset, $char) = $fmt;
+		if(isset($fmt[0])) $offset = $fmt[0];
+		else $offset = 0;
+		if(isset($fmt[1])) $char = $fmt[1];
+		else $char = "";
 		if ($char)
 		{
 			// данных недостаточно
