@@ -101,20 +101,23 @@ class WebSocketClient extends WebSocketBase
 		$scheme = ((strtolower($scheme)=='wss')?'tls':'tcp');
 		$this->socket = @stream_socket_client($scheme.'://'.$host.':'.$port, $this->errno, $this->errstr, 10);
 		if (!$this->socket) {throw new WebSocketException('connect error ('.$this->errstr.')');}
-		$this->set_timeout(10);	
-		$x = mt_rand(0,3);
-		for ($i=1;$i<=10+$x;$i++) $key .= chr(mt_rand(0,255));
+		$this->set_timeout(55);	
+		$key = "";
+		for ($i=1;$i<=16;$i++) $key .= chr(mt_rand(0,255));
 		$key = base64_encode($key);
-		$path = preg_replace('#^(\w*://)?[^/]+#', '', $url);
-		$head = "GET ".$path." HTTP/1.1"."\r\n".
-				"Host: ".$host."\r\n".
-				"Upgrade: WebSocket"."\r\n".
+		$get = ($path ?? "/").
+			(isset($query) ? "?" . $query : "").
+			(isset($fragment) ? "#" . $fragment : "");		
+		$head = "GET ".$get." HTTP/1.1"."\r\n".
+				"Host: ".$host.":".$port."\r\n".
+				"User-Agent: Bebot Sandbox\r\n".
 				"Connection: Upgrade"."\r\n".
+				"Upgrade: webSocket"."\r\n".
 				"Sec-WebSocket-Key: ".$key."\r\n".
-				"Origin: http://".$host."\r\n".
 				"Sec-WebSocket-Version: 13"."\r\n".
 				"\r\n";
-		$x = @fwrite($this->socket, $head);
+
+		$x = fwrite($this->socket, $head);
 		if (!$x)
 		{
 			$this->close();
@@ -130,6 +133,7 @@ class WebSocketClient extends WebSocketBase
 			}
 			$this->handshake .= $x;
 		} while (!in_array($x, ["\r\n", "\n"]));
+
 		if (strpos($this->handshake, $this->server_key($key))===FALSE)
 		{
 			if (preg_match('#content-length:\s*(\d+)#i', $this->handshake, $m))
@@ -211,7 +215,7 @@ class WebSocketClient extends WebSocketBase
 	{
 		if (!$this->opened)
 		{throw new WebSocketException('tried to send/recv on closed socket');}
-		$res = [];
+		$res = []; $z = null;
 		while (true)
 		{
 			// ждёт данных время, равное таймауту. задать можно через set_timeout().
@@ -241,7 +245,7 @@ class WebSocketClient extends WebSocketBase
 					}
 				}
 			}
-			if ($x===FALSE || $z['eof'] || !$this->opened)
+			if ($x===FALSE || isset($z['eof']) || !$this->opened)
 			{
 				// соединение рипнулось
 				$op = $this->opened;
@@ -279,9 +283,8 @@ class WebSocketClient extends WebSocketBase
 		// try {
 			// $this->send('', 'close');
 		// } catch (Throwable $e) {};
-		@socket_shutdown($this->socket);
-		@fclose($this->socket);
-		unset($this->socket);
+		if(isset($this->socket)) @fclose($this->socket);
+		if(isset($this->socket)) unset($this->socket);
 	}
 	
 	/*	Функция, которая должна вынудить сервер прислать любой фрейм как можно скорее.
@@ -333,7 +336,7 @@ class WebSocketBase
 			$mask = pack('N', mt_rand(0, 0xffffffff));
 			$x = strlen($data);
 			for ($i=0;$i<$x;$i++)
-			{$data{$i} = $data{$i} ^ $mask{$i % 4};}
+			{$data[$i] = $data[$i] ^ $mask[$i % 4];}
 			$sz = (0x80 | $sz);
 		}
 		$opcode = $opcodes[$opcode];
@@ -356,8 +359,10 @@ class WebSocketBase
 		Функция неявно склеивает фрагментированные фреймы, возвращая всегда целостный.
 	*/
 	protected function hybi_decode($data, &$session)
-	{
-		$data = $session['prev_data'].$data;
+	{	
+		$prev = "";
+		if(isset($session['prev_data'])) $prev = $session['prev_data'];
+		$data = $prev.$data;
 		// данных недостаточно
 		if (strlen($data) < 2)
 		{
@@ -399,7 +404,7 @@ class WebSocketBase
 			$j = 0;
 			$x = $offset + $len;
 			for ($i=$offset;$i<$x;$i++)
-			{$data{$i} = $data{$i} ^ $mask[$j++ % 4];}
+			{$data[$i] = $data[$i] ^ $mask[$j++ % 4];}
 		}
 		$res['payload'] = substr($data, $offset, $len);
 		$session['prev_data'] = substr($data, $offset + $len);
