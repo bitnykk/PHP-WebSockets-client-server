@@ -123,7 +123,7 @@ class WebSocketClient extends WebSocketBase
 			(isset($fragment) ? "#" . $fragment : "");		
 		$head = "GET ".$get." HTTP/1.1"."\r\n".
 				"Host: ".$host.":".$port."\r\n".
-				"User-Agent: Bebot Sandbox\r\n".
+				"User-Agent: Bebot\r\n".
 				"Connection: Upgrade"."\r\n".
 				"Upgrade: webSocket"."\r\n".
 				"Sec-WebSocket-Key: ".$key."\r\n".
