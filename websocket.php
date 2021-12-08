@@ -70,6 +70,10 @@
 		https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_client_applications
 		https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_servers	
 	
+	2021 :  Forked & optimized for Bebot context by Bitnykk (RK5)
+			This means to seek best balance of compatibility vs stability while max availability
+			Result might be dropping few packets when the read is too slow to respond WS side ...
+			... but it achieves intended without sacrificing responsivity for all other tasks !
 */
 
 
@@ -80,15 +84,17 @@ class WebSocketClient extends WebSocketBase
 {
 	// время в секундах, после которого соединение будет считаться повисшим, при условии что за это время не было входящих данных.
 	// после прошествия половины будет вызвана функция make_activity().
-	public $stall_time = 10;
+	public $stall_time = 28;
 	// заголовки, полученные от сервера при рукопожатии (будет заполнено при вызове connect())
 	public $handshake = '';
 	// функция, периодически вызываемая пока recv() ждёт результатов. 
 	// Может использоваться, чтобы выполнять некоторые действия во время ожидания, т.к. оно блокирующее.
 	// вызывается довольно часто (зависит от таймаута приема).
 	public $on_idle;
-	
-	protected $socket, $session, $last_activity, $last_pinged;
+	public $framesize = 4;	
+	protected $socket, $session;
+	protected $last_activity = 0;
+	protected $last_pinged = 0;
 	protected $timeout = 0.05;
 	
 	/*	Соединиться с заданным URL.
@@ -97,11 +103,18 @@ class WebSocketClient extends WebSocketBase
 	*/
 	public function connect($url)
 	{
-		extract(parse_url($url));
+		extract(parse_url($url)); // $ scheme host port path query fragment user pass
 		$scheme = ((strtolower($scheme)=='wss')?'tls':'tcp');
 		$this->socket = @stream_socket_client($scheme.'://'.$host.':'.$port, $this->errno, $this->errstr, 10);
-		if (!$this->socket) {throw new WebSocketException('connect error ('.$this->errstr.')');}
-		$this->set_timeout(10);	
+		if (!$this->socket) {
+			//throw new WebSocketException('connect error ('.$this->errstr.')');
+			$this->close();
+			$this->opened = false;
+			echo 'WebSocketException : connect error
+			';
+		}
+		$this->set_timeout(0.5);
+		
 		$key = "";
 		for ($i=1;$i<=16;$i++) $key .= chr(mt_rand(0,255));
 		$key = base64_encode($key);
@@ -114,14 +127,18 @@ class WebSocketClient extends WebSocketBase
 				"Connection: Upgrade"."\r\n".
 				"Upgrade: webSocket"."\r\n".
 				"Sec-WebSocket-Key: ".$key."\r\n".
-				"Sec-WebSocket-Version: 13"."\r\n".
-				"\r\n";
+				"Sec-WebSocket-Version: 13"."\r\n";
+		if(isset($user) && isset($pass)) $head .= "authorization: Basic ".base64_encode($user.":".$pass)."\r\n";
+		$head.= "\r\n";
 
 		$x = fwrite($this->socket, $head);
 		if (!$x)
 		{
 			$this->close();
-			throw new WebSocketException('handshake error (can\'t write to socket)');
+			//throw new WebSocketException('handshake error (can\'t write to socket)');
+			echo 'WebSocketException : handshake error
+			';			
+			$this->opened = false;
 		}
 		$this->handshake = '';
 		do {
@@ -129,7 +146,10 @@ class WebSocketClient extends WebSocketBase
 			if ($x===FALSE)
 			{
 				$this->close();
-				throw new WebSocketException('handshake error (can\'t read from socket)');
+				//throw new WebSocketException('handshake error (can\'t read from socket)');
+				echo 'WebSocketException : read error
+				';
+				$this->opened = false;
 			}
 			$this->handshake .= $x;
 		} while (!in_array($x, ["\r\n", "\n"]));
@@ -138,8 +158,11 @@ class WebSocketClient extends WebSocketBase
 		{
 			if (preg_match('#content-length:\s*(\d+)#i', $this->handshake, $m))
 			{$this->handshake .= fread($this->socket, $m[1]);}
-			throw new WebSocketException('handshake error (invalid server key: '.substr($this->handshake,0,1200).'...)');
+			//throw new WebSocketException('handshake error (invalid server key: '.substr($this->handshake,0,1200).'...)');
+			echo 'WebSocketException : key error
+			';
 			$this->close();
+			$this->opened = false;
 			return;
 		}
 		$this->set_timeout($this->timeout);
@@ -173,9 +196,14 @@ class WebSocketClient extends WebSocketBase
     public function send($data, $opcode = 'text', $is_final = true)
 	{
 		$z = null;
-		if (!$this->opened)
-		{throw new WebSocketException('tried to send/recv on closed socket');}
-		if (in_array($opcode, ['ping', 'pong', 'close']))
+		if (!$this->opened) {
+			//throw new WebSocketException('tried to send/recv on closed socket');
+			$this->close();
+			echo 'WebSocketException : send error
+			';			
+			$this->opened = false;
+		}
+		if (in_array($opcode, ['ping', 'pong', 'close'])) 
 		{
 			$data = substr($data,0,125);
 			$is_final = true;
@@ -214,13 +242,18 @@ class WebSocketClient extends WebSocketBase
 	*/
 	public function recv($blocking = true)
 	{
-		if (!$this->opened)
-		{throw new WebSocketException('tried to send/recv on closed socket');}
+		if (!$this->opened) {
+			//throw new WebSocketException('tried to send/recv on closed socket');
+			$this->close();
+			echo 'WebSocketException : recv error
+			';		
+			$this->opened = false;			
+		}
 		$res = []; $z = null;
-		while (true)
-		{
+		//while (true)
+		//{
 			// ждёт данных время, равное таймауту. задать можно через set_timeout().
-			$x = @fread($this->socket, 64*1024);
+			$x = @fread($this->socket, $this->framesize*1024);
 			$now = microtime(true);
 			if ($this->on_idle) ($this->on_idle)();
 			if (strlen($x))
@@ -231,18 +264,21 @@ class WebSocketClient extends WebSocketBase
 			if ($x==='')
 			{
 				$z = @stream_get_meta_data($this->socket);
-				if ($now-$this->last_activity >= $this->stall_time/2)
+				if ($now-$this->last_activity > $this->stall_time/2)
 				{
 					if (!$this->last_pinged)
 					{
 						$this->make_activity();
 						$this->last_pinged = $now;
 					}
-					elseif ($now-$this->last_pinged >= $this->stall_time/2)
+					elseif ($now-$this->last_pinged > $this->stall_time)
 					{
 						// длительное время нет данных == соединение повисло
 						$this->close();
-						throw new WebSocketException('connection stalled');
+						//throw new WebSocketException('connection stalled');
+						echo 'WebSocketException : stall error
+						';
+						$this->opened = false;
 					}
 				}
 			}
@@ -257,21 +293,28 @@ class WebSocketClient extends WebSocketBase
 			while ($data = $this->hybi_decode($x, $this->session))
 			{
 				$x = '';
-				if ($data['opcode']=='ping')
-				{$this->send(substr($data['payload'],0,125), 'pong');}
+				if ($data['opcode']=='ping')			
+				{
+					$this->send(substr($data['payload'],0,125), 'pong');
+				}
+				elseif ($data['opcode']=='pong') {					
+					$this->last_pinged = 0;
+				}
 				elseif ($data['opcode']=='close' && $this->opened)
 				{
 					$this->send('', 'close');
 					$this->close();
 				}
-					else
-				{$res[] = $data;}
+				else
+				{
+					$res[] = $data;
+				}
 			}
 			// есть один или несколько целых фреймов (и возможно один неполный, его данные были сохранены - их впитала функция hybi_decode()),
 			// либо целых фреймов нет, но есть один и он пока неполный.
 			if ($res || !$blocking) return $res;
 			// если не было получено ни одного целого фрейма и включен блокирующий режим, то отправляем дальше ждать неявно через fread()
-		}
+		//}
 	}
 	
 	/*	Закрыть соединение.
@@ -291,8 +334,10 @@ class WebSocketClient extends WebSocketBase
 	/*	Функция, которая должна вынудить сервер прислать любой фрейм как можно скорее.
 		Вы можете перекрыть её своей, если сервер не поддерживает WebSocket-пинги.
 	*/
-	protected function make_activity()
-	{$this->send('', 'ping');}
+	public function make_activity()
+	{
+		$this->send('', 'ping');	
+	}
 
 }
 
