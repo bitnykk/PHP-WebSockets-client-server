@@ -105,7 +105,7 @@ class WebSocketClient extends WebSocketBase
 	{
 		extract(parse_url($url)); // $ scheme host port path query fragment user pass
 		$scheme = ((strtolower($scheme)=='wss')?'tls':'tcp');
-		$this->socket = @stream_socket_client($scheme.'://'.$host.':'.$port, $this->errno, $this->errstr, 10);
+		$this->socket = @stream_socket_client($scheme.'://'.$host.':'.$port, $this->errno, $this->errstr, $this->stall_time);
 		if (!$this->socket) {
 			//throw new WebSocketException('connect error ('.$this->errstr.')');
 			$this->close();
@@ -250,7 +250,9 @@ class WebSocketClient extends WebSocketBase
 			$this->opened = false;			
 		}
 		$res = []; $z = null;
-		while (true)
+		$read[] = $this->socket; $write  = null; $except = null;
+		if(stream_select($read, $write, $except, 0)) {
+		while (!feof($this->socket))
 		{
 			// ждёт данных время, равное таймауту. задать можно через set_timeout().
 			$x = @fread($this->socket, $this->framesize*1024);
@@ -314,7 +316,7 @@ class WebSocketClient extends WebSocketBase
 			// либо целых фреймов нет, но есть один и он пока неполный.
 			if ($res || !$blocking) return $res;
 			// если не было получено ни одного целого фрейма и включен блокирующий режим, то отправляем дальше ждать неявно через fread()
-		}
+		}}
 	}
 	
 	/*	Закрыть соединение.
