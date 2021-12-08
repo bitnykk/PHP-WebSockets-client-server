@@ -250,8 +250,8 @@ class WebSocketClient extends WebSocketBase
 			$this->opened = false;			
 		}
 		$res = []; $z = null;
-		//while (true)
-		//{
+		while (true)
+		{
 			// ждёт данных время, равное таймауту. задать можно через set_timeout().
 			$x = @fread($this->socket, $this->framesize*1024);
 			$now = microtime(true);
@@ -314,7 +314,7 @@ class WebSocketClient extends WebSocketBase
 			// либо целых фреймов нет, но есть один и он пока неполный.
 			if ($res || !$blocking) return $res;
 			// если не было получено ни одного целого фрейма и включен блокирующий режим, то отправляем дальше ждать неявно через fread()
-		//}
+		}
 	}
 	
 	/*	Закрыть соединение.
